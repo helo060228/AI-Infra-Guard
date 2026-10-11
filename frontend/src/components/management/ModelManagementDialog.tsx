@@ -15,6 +15,7 @@ import { Button, buttonVariants } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { modelApi } from '../../lib/modelApi';
+import { ModelFormValidationError, saveModelForm } from '../../lib/modelForm';
 import { ModelItem, Model } from '../../types/model';
 import { protectDefaultModel } from '@/config/privateModules';
 import { maskToken } from '../../utils/tokenUtils';
@@ -51,17 +52,6 @@ const ModelManagementSettings: React.FC = () => {
   // Function that generates a unique ID
   const generateUniqueId = () => {
     return `model_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  };
-
-  // 空文本表示未配置；非空则必须是 JSON 对象，否则拒绝提交
-  const parseJsonObject = (text: string): Record<string, unknown> => {
-    const trimmed = text.trim();
-    if (!trimmed) return {};
-    const parsed = JSON.parse(trimmed);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('JSON object expected');
-    }
-    return parsed as Record<string, unknown>;
   };
 
   useEffect(() => {
@@ -119,49 +109,16 @@ const ModelManagementSettings: React.FC = () => {
     
     setLoading(true);
     try {
-      // extra_headers / extra_body 以 JSON 文本编辑，先解析再提交
-      let extraHeaders: Record<string, string>;
-      let extraBody: Record<string, unknown>;
-      try {
-        extraHeaders = parseJsonObject(extraHeadersText) as Record<string, string>;
-        extraBody = parseJsonObject(extraBodyText);
-      } catch (err) {
-        setErrors({
-          ...newErrors,
-          general: `${t('modelManagement.invalidJson')}: ${(err as Error).message}`,
-        });
-        return;
-      }
-
-      // Prepare the payload and make sure 'limit' is a number
-      const submitData = {
-        ...formData.model,
-        extra_headers: extraHeaders,
-        extra_body: extraBody,
-        limit: (() => {
-          const limitValue = formData.model.limit;
-          // Check whether 'limit' is empty
-          if (limitValue === '' || limitValue === null || limitValue === undefined) {
-            return 10; // Default values
-          }
-          const numValue = Number(limitValue);
-          return isNaN(numValue) ? 10 : numValue;
-        })(),
-      };
-      
-      let response;
-      if (editingModel) {
-        response = await modelApi.updateModel(editingModel.model_id, {
-          model: submitData,
-        });
-      } else {
-        // Automatically generate a unique ID when creating
-        const newModelData = {
-          model_id: generateUniqueId(),
-          model: submitData,
-        };
-        response = await modelApi.createModel(newModelData);
-      }
+      const response = await saveModelForm(modelApi, {
+        mode: editingModel ? 'update' : 'create',
+        modelId: editingModel?.model_id ?? generateUniqueId(),
+        model: formData.model,
+        extraHeadersText,
+        extraBodyText,
+      }, {
+        invalidJson: t('modelManagement.invalidJson'),
+        invalidHeaderValue: (key) => t('modelManagement.invalidHeaderValue', { key }),
+      });
       
       // Check the API response
       if (response.status === 0) {
@@ -174,7 +131,9 @@ const ModelManagementSettings: React.FC = () => {
         });
       }
     } catch (error) {
-      console.error('保存模型失败:', error);
+      if (!(error instanceof ModelFormValidationError)) {
+        console.error('保存模型失败:', error);
+      }
       setErrors({
         ...newErrors,
         general: error instanceof Error ? error.message : t('modelManagement.networkError'),
@@ -751,4 +710,4 @@ const ModelManagementSettings: React.FC = () => {
   );
 };
 
-export default ModelManagementSettings; 
+export default ModelManagementSettings;
